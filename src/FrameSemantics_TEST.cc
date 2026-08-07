@@ -26,6 +26,8 @@
 #include "sdf/Element.hh"
 #include "sdf/Frame.hh"
 #include "sdf/Filesystem.hh"
+#include "sdf/Joint.hh"
+#include "sdf/JointAxis.hh"
 #include "sdf/Model.hh"
 #include "sdf/Root.hh"
 #include "sdf/SDFImpl.hh"
@@ -300,16 +302,19 @@ TEST(FrameSemantics, buildPoseRelativeToGraph)
 }
 
 /////////////////////////////////////////////////
-// Resolving a frame against itself must yield exactly the identity, with no
-// floating point residual. Note that EXPECT_EQ on Pose3d is not sufficient
-// here: Pose3d::operator== compares via Vector3 and Quaternion operator==,
-// which are tolerance based, so a residual of ~1e-17 would compare equal.
-// The components have to be checked directly.
+// A joint axis declared without xyz_expressed_in resolves against the joint's
+// own frame. resolvePose then composes that frame's pose with its own inverse,
+// which is the identity in exact arithmetic but leaves a residual of about
+// 1e-17 in floating point whenever the frame carries a rotation. Rotating the
+// declared axis by that near-identity turns [0 0 1] into [0 1.26714e-17 1].
+//
+// EXPECT_EQ on Vector3d cannot catch this: Vector3d::operator== is tolerance
+// based, so the residual compares equal. Check the components directly.
 // See https://github.com/gazebosim/sdformat/issues/1692
-TEST(FrameSemantics, resolvePoseFrameAgainstItselfIsExactlyIdentity)
+TEST(FrameSemantics, resolveJointAxisAgainstOwnFrameIsExact)
 {
   const std::string testFile =
-    sdf::testing::TestFile("sdf", "model_frame_relative_to_joint.sdf");
+    sdf::testing::TestFile("sdf", "joint_axis_in_rotated_frame.sdf");
 
   sdf::Root root;
   EXPECT_TRUE(root.Load(testFile).empty());
@@ -317,66 +322,20 @@ TEST(FrameSemantics, resolvePoseFrameAgainstItselfIsExactlyIdentity)
   const sdf::Model *model = root.Model();
   ASSERT_NE(nullptr, model);
 
-  auto ownedGraph = std::make_shared<sdf::PoseRelativeToGraph>();
-  sdf::ScopedGraph<sdf::PoseRelativeToGraph> graph(ownedGraph);
-  ASSERT_TRUE(sdf::buildPoseRelativeToGraph(graph, model).empty());
-  graph = graph.ChildModelScope(model->Name());
-
-  // Frames with a non-zero rotation are the interesting cases, since the
-  // residual is introduced by the quaternion inverse and multiply.
-  for (const std::string &frame :
-       {"__model__", "P", "C", "J", "F1", "F2", "F3", "F4"})
+  for (const std::string &jointName : {"wheel_joint", "wheel_joint_exact"})
   {
-    gz::math::Pose3d pose;
-    EXPECT_TRUE(sdf::resolvePose(pose, graph, frame, frame).empty()) << frame;
+    const sdf::Joint *joint = model->JointByName(jointName);
+    ASSERT_NE(nullptr, joint) << jointName;
+    const sdf::JointAxis *axis = joint->Axis(0);
+    ASSERT_NE(nullptr, axis) << jointName;
 
-    // Diagnostic: print exactly what came back, so a passing assertion can be
-    // distinguished from an assertion that never saw the interesting value.
-    std::cerr << "DIAG " << frame
-              << " pos=(" << std::setprecision(17) << pose.Pos().X() << ","
-              << pose.Pos().Y() << "," << pose.Pos().Z() << ")"
-              << " rot=(" << pose.Rot().W() << "," << pose.Rot().X() << ","
-              << pose.Rot().Y() << "," << pose.Rot().Z() << ")" << std::endl;
+    gz::math::Vector3d xyz;
+    EXPECT_TRUE(axis->ResolveXyz(xyz).empty()) << jointName;
 
-    gz::math::Vector3d axis = pose.Rot() * gz::math::Vector3d::UnitZ;
-    std::cerr << "DIAG " << frame << " rotated UnitZ=("
-              << axis.X() << "," << axis.Y() << "," << axis.Z() << ")"
-              << std::endl;
-
-    EXPECT_DOUBLE_EQ(0.0, pose.Pos().X()) << frame;
-    EXPECT_DOUBLE_EQ(0.0, pose.Pos().Y()) << frame;
-    EXPECT_DOUBLE_EQ(0.0, pose.Pos().Z()) << frame;
-
-    EXPECT_DOUBLE_EQ(1.0, pose.Rot().W()) << frame;
-    EXPECT_DOUBLE_EQ(0.0, pose.Rot().X()) << frame;
-    EXPECT_DOUBLE_EQ(0.0, pose.Rot().Y()) << frame;
-    EXPECT_DOUBLE_EQ(0.0, pose.Rot().Z()) << frame;
+    EXPECT_DOUBLE_EQ(0.0, xyz.X()) << jointName;
+    EXPECT_DOUBLE_EQ(0.0, xyz.Y()) << jointName;
+    EXPECT_DOUBLE_EQ(1.0, xyz.Z()) << jointName;
   }
-
-  // Probe real gz-math directly: is Pose.Inverse() * Pose lossy, and does it
-  // depend on the rotation value? The fixture above uses 0 and exact pi/2;
-  // the gz-sim world that exposed this uses -1.5707.
-  for (const auto &[label, roll] : std::vector<std::pair<const char *, double>>{
-         {"zero", 0.0}, {"exact -pi/2", -GZ_PI / 2}, {"-1.5707", -1.5707},
-         {"0.1", 0.1}})
-  {
-    const gz::math::Pose3d p(0, 0, 0, roll, 0, 0);
-    const gz::math::Pose3d rt = p.Inverse() * p;
-    const gz::math::Vector3d v = rt.Rot() * gz::math::Vector3d::UnitZ;
-    const auto &q = p.Rot();
-    const double s = q.W() * q.W() + q.X() * q.X() +
-                     q.Y() * q.Y() + q.Z() * q.Z();
-    std::cerr << "PROBE " << label << " s-1=" << std::setprecision(17)
-              << (s - 1.0)
-              << " roundtrip=(" << rt.Rot().W() << "," << rt.Rot().X() << ","
-              << rt.Rot().Y() << "," << rt.Rot().Z() << ")"
-              << " UnitZ=(" << v.X() << "," << v.Y() << "," << v.Z() << ")"
-              << std::endl;
-  }
-
-  // Temporary: ctest is run with CTEST_OUTPUT_ON_FAILURE, so a passing test
-  // has its stdout discarded. Force a failure to surface the DIAG lines.
-  ADD_FAILURE() << "intentional failure to dump diagnostics";
 }
 
 /////////////////////////////////////////////////

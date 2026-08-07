@@ -353,6 +353,27 @@ TEST(FrameSemantics, resolvePoseFrameAgainstItselfIsExactlyIdentity)
     EXPECT_DOUBLE_EQ(0.0, pose.Rot().Z()) << frame;
   }
 
+  // Probe real gz-math directly: is Pose.Inverse() * Pose lossy, and does it
+  // depend on the rotation value? The fixture above uses 0 and exact pi/2;
+  // the gz-sim world that exposed this uses -1.5707.
+  for (const auto &[label, roll] : std::vector<std::pair<const char *, double>>{
+         {"zero", 0.0}, {"exact -pi/2", -GZ_PI / 2}, {"-1.5707", -1.5707},
+         {"0.1", 0.1}})
+  {
+    const gz::math::Pose3d p(0, 0, 0, roll, 0, 0);
+    const gz::math::Pose3d rt = p.Inverse() * p;
+    const gz::math::Vector3d v = rt.Rot() * gz::math::Vector3d::UnitZ;
+    const auto &q = p.Rot();
+    const double s = q.W() * q.W() + q.X() * q.X() +
+                     q.Y() * q.Y() + q.Z() * q.Z();
+    std::cerr << "PROBE " << label << " s-1=" << std::setprecision(17)
+              << (s - 1.0)
+              << " roundtrip=(" << rt.Rot().W() << "," << rt.Rot().X() << ","
+              << rt.Rot().Y() << "," << rt.Rot().Z() << ")"
+              << " UnitZ=(" << v.X() << "," << v.Y() << "," << v.Z() << ")"
+              << std::endl;
+  }
+
   // Temporary: ctest is run with CTEST_OUTPUT_ON_FAILURE, so a passing test
   // has its stdout discarded. Force a failure to surface the DIAG lines.
   ADD_FAILURE() << "intentional failure to dump diagnostics";

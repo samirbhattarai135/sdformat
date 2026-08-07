@@ -352,6 +352,10 @@ TEST(FrameSemantics, resolvePoseFrameAgainstItselfIsExactlyIdentity)
     EXPECT_DOUBLE_EQ(0.0, pose.Rot().Y()) << frame;
     EXPECT_DOUBLE_EQ(0.0, pose.Rot().Z()) << frame;
   }
+
+  // Temporary: ctest is run with CTEST_OUTPUT_ON_FAILURE, so a passing test
+  // has its stdout discarded. Force a failure to surface the DIAG lines.
+  ADD_FAILURE() << "intentional failure to dump diagnostics";
 }
 
 /////////////////////////////////////////////////

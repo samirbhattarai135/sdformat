@@ -298,6 +298,48 @@ TEST(FrameSemantics, buildPoseRelativeToGraph)
 }
 
 /////////////////////////////////////////////////
+// Resolving a frame against itself must yield exactly the identity, with no
+// floating point residual. Note that EXPECT_EQ on Pose3d is not sufficient
+// here: Pose3d::operator== compares via Vector3 and Quaternion operator==,
+// which are tolerance based, so a residual of ~1e-17 would compare equal.
+// The components have to be checked directly.
+// See https://github.com/gazebosim/sdformat/issues/1692
+TEST(FrameSemantics, resolvePoseFrameAgainstItselfIsExactlyIdentity)
+{
+  const std::string testFile =
+    sdf::testing::TestFile("sdf", "model_frame_relative_to_joint.sdf");
+
+  sdf::Root root;
+  EXPECT_TRUE(root.Load(testFile).empty());
+
+  const sdf::Model *model = root.Model();
+  ASSERT_NE(nullptr, model);
+
+  auto ownedGraph = std::make_shared<sdf::PoseRelativeToGraph>();
+  sdf::ScopedGraph<sdf::PoseRelativeToGraph> graph(ownedGraph);
+  ASSERT_TRUE(sdf::buildPoseRelativeToGraph(graph, model).empty());
+  graph = graph.ChildModelScope(model->Name());
+
+  // Frames with a non-zero rotation are the interesting cases, since the
+  // residual is introduced by the quaternion inverse and multiply.
+  for (const std::string &frame :
+       {"__model__", "P", "C", "J", "F1", "F2", "F3", "F4"})
+  {
+    gz::math::Pose3d pose;
+    EXPECT_TRUE(sdf::resolvePose(pose, graph, frame, frame).empty()) << frame;
+
+    EXPECT_DOUBLE_EQ(0.0, pose.Pos().X()) << frame;
+    EXPECT_DOUBLE_EQ(0.0, pose.Pos().Y()) << frame;
+    EXPECT_DOUBLE_EQ(0.0, pose.Pos().Z()) << frame;
+
+    EXPECT_DOUBLE_EQ(1.0, pose.Rot().W()) << frame;
+    EXPECT_DOUBLE_EQ(0.0, pose.Rot().X()) << frame;
+    EXPECT_DOUBLE_EQ(0.0, pose.Rot().Y()) << frame;
+    EXPECT_DOUBLE_EQ(0.0, pose.Rot().Z()) << frame;
+  }
+}
+
+/////////////////////////////////////////////////
 TEST(NestedFrameSemantics, buildFrameAttachedToGraph_Model)
 {
   const std::string testFile =

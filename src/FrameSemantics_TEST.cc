@@ -15,6 +15,8 @@
  *
  */
 
+#include <iomanip>
+#include <iostream>
 #include <sstream>
 #include <string>
 
@@ -327,6 +329,19 @@ TEST(FrameSemantics, resolvePoseFrameAgainstItselfIsExactlyIdentity)
   {
     gz::math::Pose3d pose;
     EXPECT_TRUE(sdf::resolvePose(pose, graph, frame, frame).empty()) << frame;
+
+    // Diagnostic: print exactly what came back, so a passing assertion can be
+    // distinguished from an assertion that never saw the interesting value.
+    std::cerr << "DIAG " << frame
+              << " pos=(" << std::setprecision(17) << pose.Pos().X() << ","
+              << pose.Pos().Y() << "," << pose.Pos().Z() << ")"
+              << " rot=(" << pose.Rot().W() << "," << pose.Rot().X() << ","
+              << pose.Rot().Y() << "," << pose.Rot().Z() << ")" << std::endl;
+
+    gz::math::Vector3d axis = pose.Rot() * gz::math::Vector3d::UnitZ;
+    std::cerr << "DIAG " << frame << " rotated UnitZ=("
+              << axis.X() << "," << axis.Y() << "," << axis.Z() << ")"
+              << std::endl;
 
     EXPECT_DOUBLE_EQ(0.0, pose.Pos().X()) << frame;
     EXPECT_DOUBLE_EQ(0.0, pose.Pos().Y()) << frame;
